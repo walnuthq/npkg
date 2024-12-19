@@ -1,16 +1,11 @@
 import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
-import { UploadModule } from './upload/upload.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MikroOrmModule } from '@mikro-orm/nestjs';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
+import { PackagesModule } from './packages/packages.module';
 import MikroOrmConfig from './mikro-orm.config';
-
-@Module({
-  imports: [UploadModule],
-  controllers: [AppController],
-  providers: [AppService],
-})
+import { UploadModule } from './upload/upload.module';
 
 @Module({
   imports: [
@@ -23,7 +18,7 @@ import MikroOrmConfig from './mikro-orm.config';
       useFactory: async () => MikroOrmConfig,
       inject: [ConfigService],
     }),
-    UploadModule
+    PackagesModule, UploadModule
   ],
   controllers: [AppController],
   providers: [AppService],

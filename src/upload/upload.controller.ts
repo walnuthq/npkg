@@ -1,69 +1,78 @@
-import { Controller, Post, UseInterceptors, UploadedFile, Res, Get, Param } from '@nestjs/common';
+import { Controller, Post, UseInterceptors, UploadedFile, Res, HttpStatus, Get } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import * as fs from 'fs';
 import * as path from 'path';
+import { PackagesService } from '../packages/packages.service';
 
-@Controller('api/v1')
+@Controller('api/v1/upload')
 export class UploadController {
+  private readonly uploadPath = process.env.REGISTRY_PATH ?? path.join(__dirname, '..', 'noir_registry');
 
-    private readonly uploadPath = process.env.REGISTRY_PATH ?? path.join(__dirname, '..', `noir_registry`);
-    @Post('')
-    @UseInterceptors(FileInterceptor('file'))
-    async uploadFile(@UploadedFile() file: Express.Multer.File, @Res() res) {
-        try {
-            // Ensure the directory exists
-            if (!fs.existsSync(this.uploadPath)) {
-                fs.mkdirSync(this.uploadPath, { recursive: true });
-            }
+  constructor(private readonly packagesService: PackagesService) {}
 
-            // Save the file using a writable stream
-            const filePath = path.join(this.uploadPath, `${file.originalname}`);
-            const writeStream = fs.createWriteStream(filePath);
-
-            // Write the file in chunks to avoid issues with large files
-            writeStream.write(file.buffer);
-            writeStream.end();  // Ensure stream is closed after writing is complete
-
-            writeStream.on('finish', () => {
-                console.log('File successfully saved:', filePath);
-            });
-
-            writeStream.on('error', (error) => {
-                console.error('Error writing file:', error);
-                return res.status(500).json({
-                    message: 'Error saving file',
-                    error: error.message,
-                });
-            });
-
-            return res.json({
-                message: 'File uploaded successfully',
-                file: file.originalname,
-            });
-
-        } catch (error) {
-            console.error('Error uploading file:', error);
-            return res.status(500).json({
-                message: 'Error uploading file',
-                error: error.message,
-            });
-        }
+  @Post('')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadFile(@UploadedFile() file: Express.Multer.File, @Res() res) {
+    if (!file) {
+      return res.status(HttpStatus.BAD_REQUEST).json({ message: 'File is required.' });
     }
 
-    @Get('/:name/:version')
-    getFile(@Param('name') packageName: string, @Param('version') version: string, @Res() res) {
-        const filePath = path.join(this.uploadPath, `${packageName}_${version}`);
+    const filePath = path.join(this.uploadPath, file.originalname);
 
-        // Check if the file exists
-        if (fs.existsSync(filePath)) {
-            console.log(`File found: ${filePath}`);
-            res.sendFile(filePath, { headers: { 'Content-Disposition': `attachment; filename="${packageName}"` } });
-        } else {
-            console.log(`File not found: ${filePath}`);
-            return res.status(404).json({ message: 'File not found' });
-        }
+    try {
+      console.log('Checking upload directory:', this.uploadPath);
+      if (!fs.existsSync(this.uploadPath)) {
+        console.log('Directory does not exist. Creating...');
+        fs.mkdirSync(this.uploadPath, { recursive: true });
+      }
+
+
+      console.log('Saving file to:', filePath);
+      fs.writeFileSync(filePath, file.buffer);
+
+    
+      const [name, version] = file.originalname.split('_');
+      if (!name || !version) {
+        throw new Error('Invalid file name format. Use "name_major.minor.patch.ext".');
+      }
+
+      const versionMatch = version.match(/^(\d+)\.(\d+)\.(\d+)/);
+      if (!versionMatch) {
+        throw new Error('Invalid version format. Use "major.minor.patch".');
+      }
+
+      const [major, minor, patch] = versionMatch.slice(1).map(Number);
+      const sortableVersion = `${major}.${minor}.${patch}`.padStart(12, '0');
+
+ 
+      const packageBlob = file.buffer.toString('base64');
+      const sizeKb = Math.round(file.buffer.length / 1024);
+
+      console.log('Saving package and version to the database...');
+      const pkg = await this.packagesService.findOrCreatePackage(name);
+      const newVersion = await this.packagesService.addVersion(pkg.id, {
+        major,
+        minor,
+        patch,
+        sortableVersion,
+        versionNumber: `${major}.${minor}.${patch}`,
+        packageBlob,
+        sizeKb,
+      });
+      console.log('File uploaded and processed successfully.');
+      return res.status(HttpStatus.OK).json({
+        message: 'File uploaded successfully',
+        package: pkg.name,
+        version: newVersion.versionNumber,
+      });
+    } catch (error) {
+      console.error('Error uploading file:', error);
+      return res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
+        message: 'Error uploading file',
+        error: error.message,
+      });
     }
-
+  }
     @Get()
     getAllPackages(@Res() res) {
         const dirPath = path.join(this.uploadPath);
